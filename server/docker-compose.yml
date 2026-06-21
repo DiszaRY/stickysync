@@ -1,0 +1,15 @@
+# Личный сервер стикеров. Изолирован, наружу не торчит — только через nginx.
+services:
+  stickers:
+    build: .
+    image: stickers:latest
+    container_name: stickers
+    restart: unless-stopped
+    env_file: .env                       # STICKERS_PASSWORD и STICKERS_TOKEN
+    environment:
+      DB_PATH: /data/stickers.db
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - ./data:/data
+      - ./static:/app/static:ro

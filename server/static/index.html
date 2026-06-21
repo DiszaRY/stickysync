@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f1ea">
+<link rel="manifest" href="/static/manifest.json">
+<title>StickySync</title>
+<style>
+  :root{ --bg:#f4f1ea; --card:#fff; --ink:#222; --muted:#777; --line:#e3ddcf; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header{ position:sticky; top:0; background:var(--bg); padding:14px 16px calc(14px + env(safe-area-inset-top)); display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); }
+  header h1{ font-size:18px; font-weight:600; margin:0; }
+  header button{ background:none; border:none; color:var(--muted); font-size:14px; }
+  main{ padding:14px 16px 90px; max-width:680px; margin:0 auto; }
+
+  .composer{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:16px; }
+  textarea{ width:100%; border:none; outline:none; resize:none; font:inherit; font-size:16px; background:transparent; color:var(--ink); min-height:44px; }
+  .colors{ display:flex; gap:10px; margin:8px 0; }
+  .dot{ width:26px; height:26px; border-radius:50%; border:2px solid transparent; }
+  .dot.sel{ border-color:#555; }
+  .row{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .btn{ background:#2b2b2b; color:#fff; border:none; border-radius:10px; padding:10px 16px; font-size:15px; font-weight:500; }
+  .btn.ghost{ background:#eee; color:#333; }
+
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+  .note{ border-radius:12px; padding:12px 12px 36px; position:relative; min-height:96px; white-space:pre-wrap; word-break:break-word; font-size:15px; line-height:1.4; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .note .del{ position:absolute; bottom:6px; right:8px; background:rgba(0,0,0,.06); border:none; border-radius:8px; padding:4px 8px; font-size:13px; color:#333; }
+  .empty{ color:var(--muted); text-align:center; padding:40px 0; }
+  .chk{ display:flex; align-items:flex-start; gap:8px; margin:3px 0; }
+  .chk input{ width:18px; height:18px; margin:2px 0 0; flex:none; }
+  .chk .done{ text-decoration:line-through; opacity:.55; }
+  .bul{ padding-left:16px; position:relative; }
+  .bul:before{ content:"•"; position:absolute; left:2px; }
+  .ntitle{ font-weight:600; margin-bottom:4px; }
+  .nmeta{ font-size:12px; opacity:.7; margin-bottom:6px; }
+
+  .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:flex-end; justify-content:center; z-index:10; }
+  .overlay.on{ display:flex; }
+  .sheet{ background:#fff; width:100%; max-width:680px; border-radius:16px 16px 0 0; padding:16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .login{ max-width:340px; margin:18vh auto 0; padding:0 20px; text-align:center; }
+  .login input{ width:100%; font-size:17px; padding:12px; border:1px solid var(--line); border-radius:10px; margin:14px 0; }
+  .err{ color:#c0392b; font-size:14px; min-height:18px; }
+</style>
+</head>
+<body>
+
+<div id="loginView" class="login" style="display:none">
+  <h1>StickySync</h1>
+  <p style="color:var(--muted)">Enter password</p>
+  <input id="pw" type="password" inputmode="text" autocomplete="current-password" placeholder="Password">
+  <div class="err" id="loginErr"></div>
+  <button class="btn" style="width:100%" onclick="doLogin()">Sign in</button>
+</div>
+
+<div id="appView" style="display:none">
+  <header>
+    <h1>StickySync</h1>
+    <button onclick="logout()">Sign out</button>
+  </header>
+  <main>
+    <div class="composer">
+      <textarea id="newText" placeholder="New note…"></textarea>
+      <div class="colors" id="newColors"></div>
+      <div class="row">
+        <span style="color:var(--muted);font-size:13px" id="syncInfo">&nbsp;</span>
+        <button class="btn" onclick="addNote()">Add</button>
+      </div>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" style="display:none">No notes yet. Add your first one above.</div>
+  </main>
+</div>
+
+<div class="overlay" id="editOverlay">
+  <div class="sheet">
+    <input id="editTitle" placeholder="Title (optional)" style="width:100%;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px;background:#fff;color:#222;">
+    <textarea id="editText" style="font-size:16px;min-height:120px"></textarea>
+    <div class="colors" id="editColors"></div>
+    <div class="row">
+      <button class="btn ghost" onclick="closeEdit()">Cancel</button>
+      <button class="btn" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLORS = {
+  yellow:{bg:"#F5EAA6",ink:"#6b5c12"},
+  pink:  {bg:"#F4CDD8",ink:"#7c3050"},
+  blue:  {bg:"#CFE0F2",ink:"#2c4f70"},
+  green: {bg:"#D2E8C6",ink:"#3a6630"},
+  purple:{bg:"#DCD0EE",ink:"#4b3c79"},
+  orange:{bg:"#F5D9BB",ink:"#8a5520"},
+};
+let token = localStorage.getItem("stk_token") || "";
+let newColor = "yellow";
+let editId = null, editColor = "yellow";
+
+function show(view){
+  document.getElementById("loginView").style.display = view==="login"?"block":"none";
+  document.getElementById("appView").style.display   = view==="app"?"block":"none";
+}
+async function api(method, path, body){
+  const r = await fetch(path, {
+    method,
+    headers: Object.assign({"Content-Type":"application/json"}, token?{"Authorization":"Bearer "+token}:{}),
+    body: body?JSON.stringify(body):undefined
+  });
+  if(r.status===401){ token=""; localStorage.removeItem("stk_token"); show("login"); throw new Error("401"); }
+  if(!r.ok) throw new Error("http "+r.status);
+  return r.status===204?null:r.json();
+}
+async function doLogin(){
+  const pw = document.getElementById("pw").value;
+  document.getElementById("loginErr").textContent = "";
+  try{
+    const r = await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})});
+    if(!r.ok){ document.getElementById("loginErr").textContent="Wrong password"; return; }
+    const d = await r.json();
+    token = d.token; localStorage.setItem("stk_token", token);
+    start();
+  }catch(e){ document.getElementById("loginErr").textContent="Connection error"; }
+}
+function logout(){ token=""; localStorage.removeItem("stk_token"); show("login"); }
+
+function colorDots(containerId, getSel, onPick){
+  const c = document.getElementById(containerId); c.innerHTML="";
+  for(const name in COLORS){
+    const d = document.createElement("div");
+    d.className = "dot" + (getSel()===name?" sel":"");
+    d.style.background = COLORS[name].bg;
+    d.onclick = ()=>{ onPick(name); colorDots(containerId, getSel, onPick); };
+    c.appendChild(d);
+  }
+}
+async function addNote(){
+  const t = document.getElementById("newText").value.trim();
+  if(!t) return;
+  await api("POST","/api/notes",{text:t,color:newColor,x:60,y:60});
+  document.getElementById("newText").value="";
+  load();
+}
+function openEdit(note){
+  editId = note.id; editColor = note.color;
+  document.getElementById("editTitle").value = note.title||"";
+  document.getElementById("editText").value = note.text;
+  colorDots("editColors", ()=>editColor, n=>editColor=n);
+  document.getElementById("editOverlay").classList.add("on");
+}
+function closeEdit(){ document.getElementById("editOverlay").classList.remove("on"); editId=null; }
+async function saveEdit(){
+  const t = document.getElementById("editText").value;
+  const ti = document.getElementById("editTitle").value;
+  await api("PUT","/api/notes/"+editId,{text:t,color:editColor,title:ti});
+  closeEdit(); load();
+}
+async function delNote(id){
+  if(!confirm("Delete this note?")) return;
+  await api("DELETE","/api/notes/"+id); load();
+}
+function esc(s){ return s.replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function fmtTime(ts){ const d=new Date(ts*1000), p=x=>String(x).padStart(2,'0'); return p(d.getDate())+"."+p(d.getMonth()+1)+" "+p(d.getHours())+":"+p(d.getMinutes()); }
+function noteHtml(n){
+  const lines = (n.text||"").split("\n");
+  let h = "";
+  if(n.title) h += `<div class="ntitle">${esc(n.title)}</div>`;
+  const meta = [];
+  if(n.locked) meta.push("🔒");
+  if(n.alarm && n.alarm>0) meta.push("⏰ "+fmtTime(n.alarm));
+  if(meta.length) h += `<div class="nmeta">${meta.join("&nbsp;&nbsp;")}</div>`;
+  for(let i=0;i<lines.length;i++){
+    const cm = lines[i].match(/^(\s*)\[([ xX])\]\s(.*)$/);
+    if(cm){
+      const ck = cm[2].toLowerCase()==="x";
+      h += `<label class="chk"><input type="checkbox" data-i="${i}" ${ck?"checked":""}><span class="${ck?'done':''}">${esc(cm[3])||"&nbsp;"}</span></label>`;
+      continue;
+    }
+    const bm = lines[i].match(/^(\s*)[-•]\s(.*)$/);
+    if(bm){ h += `<div class="bul">${esc(bm[2])||"&nbsp;"}</div>`; continue; }
+    h += `<div>${esc(lines[i])||"&nbsp;"}</div>`;
+  }
+  return h;
+}
+async function toggleCheck(n, i){
+  const lines = (n.text||"").split("\n");
+  lines[i] = lines[i].replace(/^(\s*)\[([ xX])\]\s/, (m,sp,st)=> sp+"["+(st===" "?"x":" ")+"] ");
+  n.text = lines.join("\n");
+  try{ await api("PUT","/api/notes/"+n.id,{text:n.text}); }catch(e){}
+  render(window._notes||[]);
+}
+function render(notes){
+  window._notes = notes;
+  const grid = document.getElementById("grid");
+  grid.innerHTML="";
+  document.getElementById("empty").style.display = notes.length?"none":"block";
+  for(const n of notes){
+    const c = COLORS[n.color]||COLORS.yellow;
+    const el = document.createElement("div");
+    el.className="note"; el.style.background=c.bg; el.style.color=c.ink;
+    const body = document.createElement("div");
+    body.innerHTML = noteHtml(n);
+    el.appendChild(body);
+    el.onclick = ()=>{ if(!n.locked) openEdit(n); };
+    body.querySelectorAll("input[type=checkbox]").forEach(cb=>{
+      if(n.locked){ cb.disabled = true; return; }
+      cb.onclick = (e)=>{ e.stopPropagation(); toggleCheck(n, parseInt(cb.dataset.i,10)); };
+    });
+    const del = document.createElement("button");
+    del.className="del"; del.textContent="Delete";
+    del.onclick = (e)=>{ e.stopPropagation(); delNote(n.id); };
+    el.appendChild(del);
+    grid.appendChild(el);
+  }
+}
+async function load(){
+  try{
+    const notes = await api("GET","/api/notes");
+    if(document.getElementById("editOverlay").classList.contains("on")) return;
+    render(notes);
+  }catch(e){}
+}
+function start(){
+  show("app");
+  colorDots("newColors", ()=>newColor, n=>newColor=n);
+  load();
+  setInterval(load, 5000);
+}
+if(token){ start(); } else { show("login"); }
+</script>
+</body>
+</html>
