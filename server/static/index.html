@@ -21,7 +21,7 @@
   #canvas{ position:fixed; top:52px; left:0; right:0; bottom:0; overflow:hidden; touch-action:none; cursor:grab;
     background-image:radial-gradient(circle, rgba(0,0,0,.10) 1.2px, transparent 1.2px); background-size:26px 26px; background-position:0 0; }
   #canvas.grabbing{ cursor:grabbing; }
-  #world{ position:absolute; top:0; left:0; transform-origin:0 0; will-change:transform; }
+  #world{ position:absolute; top:0; left:0; transform-origin:0 0; }
 
   .card{ position:absolute; background:#fff; border-radius:14px; border:.5px solid rgba(0,0,0,.10); box-shadow:0 4px 16px rgba(0,0,0,.13); display:flex; flex-direction:column; overflow:hidden; }
   .card-head{ height:30px; flex:none; display:flex; align-items:center; padding:0 6px 0 11px; cursor:grab; gap:6px; }
@@ -143,9 +143,12 @@ async function doLogin(){
 function logout(){ token=""; localStorage.removeItem("stk_token"); show("login"); }
 
 function applyTransform(){
-  world.style.transform=`translate(${pan.x}px,${pan.y}px) scale(${zoom})`;
+  const px=Math.round(pan.x), py=Math.round(pan.y);
+  world.style.transform = (Math.abs(zoom-1)<0.001)
+    ? `translate(${px}px,${py}px)`
+    : `translate(${px}px,${py}px) scale(${zoom})`;
   canvas.style.backgroundSize=`${26*zoom}px ${26*zoom}px`;
-  canvas.style.backgroundPosition=`${pan.x}px ${pan.y}px`;
+  canvas.style.backgroundPosition=`${px}px ${py}px`;
   document.getElementById("zoomlbl").textContent=Math.round(zoom*100)+"%";
 }
 function saveView(){ localStorage.setItem("stk_view",JSON.stringify({pan,zoom})); }
