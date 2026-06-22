@@ -20,9 +20,28 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "StickySync"
-CFG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "StickySync")
-CFG_PATH = os.path.join(CFG_DIR, "config.json")
 APP_FILE = os.path.realpath(__file__)
+
+
+def _cfg_path():
+    """Config is kept next to the script (portable). Falls back to %APPDATA%
+    only if the script's folder is read-only."""
+    here = os.path.join(os.path.dirname(APP_FILE), "config.json")
+    appdata = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "StickySync", "config.json")
+    if os.path.exists(here):
+        return here
+    if os.path.exists(appdata):
+        return appdata
+    try:
+        t = os.path.join(os.path.dirname(APP_FILE), ".stk_wtest")
+        open(t, "w").close()
+        os.remove(t)
+        return here
+    except Exception:
+        return appdata
+
+
+CFG_PATH = _cfg_path()
 STARTUP_DIR = os.path.join(os.environ.get("APPDATA", ""),
                            "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 STARTUP_LNK = os.path.join(STARTUP_DIR, "StickySync.lnk")
@@ -107,7 +126,7 @@ def load_cfg():
 
 
 def save_cfg(cfg):
-    os.makedirs(CFG_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(CFG_PATH), exist_ok=True)
     with open(CFG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f)
 
