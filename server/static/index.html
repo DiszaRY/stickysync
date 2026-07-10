@@ -54,6 +54,8 @@
   .bul{ padding-left:15px; position:relative; }
   .bul:before{ content:"•"; position:absolute; left:2px; }
   .ph{ color:#9a958a; }
+  .bodyedit{ width:100%; height:100%; background:transparent; border:none; outline:none; resize:none; font:inherit; font-size:14px; line-height:1.45; color:#33312b; padding:0; white-space:pre-wrap; }
+  .ti-input{ flex:1; background:rgba(255,255,255,.55); border:none; outline:none; font:inherit; font-size:13px; font-weight:600; border-radius:6px; padding:2px 6px; min-width:0; color:inherit; }
 
   .overlay{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:flex-end; justify-content:center; z-index:30; }
   .overlay.on{ display:flex; }
@@ -116,19 +118,6 @@
   <div id="canvas"><div id="world"></div></div>
 </div>
 
-<div class="overlay" id="editOverlay">
-  <div class="sheet">
-    <input id="editTitle">
-    <textarea id="editText"></textarea>
-    <div class="colors" id="editColors"></div>
-    <div class="row">
-      <button class="btn danger" id="t_del" onclick="delCurrent()"></button>
-      <button class="btn ghost" id="t_cancel" onclick="closeEdit()"></button>
-      <button class="btn" id="t_save" onclick="saveEdit()"></button>
-    </div>
-  </div>
-</div>
-
 <div class="overlay" id="trashOverlay">
   <div class="sheet">
     <h2 id="tr_title"></h2>
@@ -177,17 +166,12 @@ function toggleTheme(){ theme = theme==="dark" ? "light" : "dark"; localStorage.
 // i18n static
 document.getElementById("t_title").textContent=L.title;
 document.getElementById("t_add").textContent=L.add;
-document.getElementById("t_del").textContent=L.del;
-document.getElementById("t_cancel").textContent=L.cancel;
-document.getElementById("t_save").textContent=L.save;
 document.getElementById("m_trash").textContent=L.trash;
 document.getElementById("m_export").textContent=L.export;
 document.getElementById("m_logout").textContent=L.logout;
 document.getElementById("tr_title").textContent=L.trTitle;
 document.getElementById("tr_hint").textContent=L.trHint;
 document.getElementById("tr_close").textContent=L.close;
-document.getElementById("editTitle").placeholder=L.titlePh;
-document.getElementById("editText").placeholder=L.textPh;
 document.getElementById("lg_user").placeholder=L.userPh;
 document.getElementById("lg_pw").placeholder=L.pwPh;
 document.getElementById("q").placeholder=L.searchPh;
@@ -199,8 +183,13 @@ let byId = {};
 let pan = {x:0,y:0}, zoom = 1, viewInit = false;
 const canvas = document.getElementById("canvas");
 const world = document.getElementById("world");
-let editId = null, editColor = "yellow";
+const ORDER = Object.keys(COLORS);
 let regMode = false, regEnabled = false;
+const toGlyphs=t=>(t||"").replace(/^(\s*)\[( |x|X)\] /gm,(m,sp,st)=>sp+(st===" "?"☐":"☑")+" ");
+const toStorage=t=>(t||"").replace(/^(\s*)([☐☑]) /gm,(m,sp,g2)=>sp+(g2==="☑"?"[x]":"[ ]")+" ");
+function caretForLine(text,i){ const lines=text.split("\n"); let p=0;
+  for(let k=0;k<lines.length&&k<=i;k++){ p += (k<i ? lines[k].length+1 : lines[k].length); }
+  return Math.min(p,text.length); }
 
 try{ const v=JSON.parse(localStorage.getItem("stk_view")||"null"); if(v){ pan=v.pan; zoom=v.zoom; viewInit=true; } }catch(e){}
 
@@ -315,10 +304,10 @@ function bodyHtml(n){
   for(let i=0;i<lines.length;i++){
     const cm=lines[i].match(/^(\s*)\[([ xX])\]\s(.*)$/);
     if(cm){ const ck=cm[2].toLowerCase()==="x";
-      h+=`<label class="chk"><input type="checkbox" data-i="${i}" ${ck?"checked":""}><span class="${ck?'done':''}">${esc(cm[3])||"&nbsp;"}</span></label>`; continue; }
+      h+=`<label class="chk" data-line="${i}"><input type="checkbox" data-i="${i}" ${ck?"checked":""}><span class="${ck?'done':''}">${esc(cm[3])||"&nbsp;"}</span></label>`; continue; }
     const bm=lines[i].match(/^(\s*)[-•]\s(.*)$/);
-    if(bm){ h+=`<div class="bul">${esc(bm[2])||"&nbsp;"}</div>`; continue; }
-    h+=`<div>${esc(lines[i])||"&nbsp;"}</div>`;
+    if(bm){ h+=`<div class="bul" data-line="${i}">${esc(bm[2])||"&nbsp;"}</div>`; continue; }
+    h+=`<div data-line="${i}">${esc(lines[i])||"&nbsp;"}</div>`;
   }
   return h;
 }
@@ -326,13 +315,20 @@ function makeCard(n){
   const c=COLORS[n.color]||COLORS.yellow;
   const el=document.createElement("div"); el.className="card"; el.dataset.id=n.id;
   el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.style.width=(n.w||240)+"px"; el.style.height=(n.h||210)+"px";
-  el.innerHTML=`<div class="card-head" style="background:${c.bg}"><span class="ti" style="color:${c.ink}">${esc(n.title||"")}</span><span class="x" style="color:${c.ink};opacity:${n.pinned?1:.35}" data-act="pin">📌</span><span class="x" style="color:${c.ink}" data-act="del">✕</span></div>`
+  el.innerHTML=`<div class="card-head" style="background:${c.bg}"><span class="ti" style="color:${c.ink}">${esc(n.title||"")}</span><span class="x" style="color:${c.ink}" data-act="color">●</span><span class="x" style="color:${c.ink};opacity:${n.pinned?1:.35}" data-act="pin">📌</span><span class="x" style="color:${c.ink}" data-act="del">✕</span></div>`
     +`<div class="card-body">${bodyHtml(n)}</div><div class="rz"></div>`;
-  el.querySelectorAll("input[type=checkbox]").forEach(cb=>{
+  wireChecks(el,n);
+  return el;
+}
+function wireChecks(el,n){
+  el.querySelectorAll(".card-body input[type=checkbox]").forEach(cb=>{
     cb.addEventListener("change",ev=>{ ev.stopPropagation(); toggleCheck(n,parseInt(cb.dataset.i,10)); });
     cb.addEventListener("pointerdown",ev=>ev.stopPropagation());
   });
-  return el;
+}
+function renderBody(el,n){
+  const b=el.querySelector(".card-body");
+  if(b){ b.innerHTML=bodyHtml(n); wireChecks(el,n); }
 }
 function render(){
   if(interacting()) return;
@@ -360,19 +356,19 @@ function updateCardEl(n){ const el=byId[n.id]; if(!el) return;
 
 const pointers=new Map();
 let g=null;
-function interacting(){ return g!==null || document.getElementById("editOverlay").classList.contains("on"); }
+function interacting(){ return g!==null || (document.activeElement && world.contains(document.activeElement)); }
 function noteFromEl(el){ return byId && el ? notes.find(n=>String(n.id)===el.dataset.id) : null; }
 
 canvas.addEventListener("pointerdown",e=>{
   closeMenu();
   pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
   if(pointers.size===2){ startPinch(); return; }
-  if(e.target.tagName==="INPUT") return;
+  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA") return;
   canvas.setPointerCapture(e.pointerId);
   const cardEl=e.target.closest(".card");
   if(e.target.classList.contains("rz")){ const n=noteFromEl(cardEl); g={mode:"resize",n,sx:e.clientX,sy:e.clientY,w:n.w||240,h:n.h||210}; }
   else if(cardEl){ const n=noteFromEl(cardEl); g={mode:"card",n,el:cardEl,sx:e.clientX,sy:e.clientY,x:n.x,y:n.y,moved:false,
-      act:e.target.dataset.act}; cardEl.style.zIndex=Date.now()%100000; }
+      act:e.target.dataset.act,t:e.target}; cardEl.style.zIndex=Date.now()%100000; }
   else { canvas.classList.add("grabbing"); g={mode:"pan",sx:e.clientX,sy:e.clientY,px:pan.x,py:pan.y}; }
 });
 canvas.addEventListener("pointermove",e=>{
@@ -398,7 +394,11 @@ function endPointer(e){
     else if(g.act==="del"){ delNote(g.n.id); }
     else if(g.act==="pin"){ const n=g.n; n.pinned=n.pinned?0:1; g=null; render();
       api("PUT","/api/notes/"+n.id,{pinned:n.pinned}).catch(()=>{}); return; }
-    else { openEdit(g.n); }
+    else if(g.act==="color"){ const n=g.n; g=null; cycleColor(n); return; }
+    else if(g.t && g.t.classList && g.t.classList.contains("ti")){ const n=g.n; g=null; editTitle(n); return; }
+    else { const n=g.n;
+      const le=(g.t && g.t.closest) ? g.t.closest("[data-line]") : null;
+      g=null; enterEdit(n, le ? +le.dataset.line : null); return; }
   }
   g=null;
 }
@@ -410,7 +410,9 @@ canvas.addEventListener("dblclick",e=>{
   if(e.target.closest(".card")) return;
   const r=canvas.getBoundingClientRect();
   const x=Math.round((e.clientX-r.left-pan.x)/zoom), y=Math.round((e.clientY-r.top-pan.y)/zoom);
-  api("POST","/api/notes",{text:"",color:"yellow",x,y,w:240,h:200}).then(load).catch(()=>{});
+  api("POST","/api/notes",{text:"",color:"yellow",x,y,w:240,h:200})
+    .then(async()=>{ await load(); const fresh=notes[notes.length-1]; if(fresh) enterEdit(fresh,null); })
+    .catch(()=>{});
 });
 
 let pinch=null;
@@ -430,29 +432,84 @@ async function toggleCheck(n,i){
   const lines=(n.text||"").split("\n");
   lines[i]=lines[i].replace(/^(\s*)\[([ xX])\]\s/,(m,sp,st)=>sp+"["+(st===" "?"x":" ")+"] ");
   n.text=lines.join("\n");
+  const el=byId[n.id]; if(el) renderBody(el,n);
   try{ await api("PUT","/api/notes/"+n.id,{text:n.text}); }catch(e){}
 }
-function openEdit(n){ editId=n.id; editColor=n.color;
-  document.getElementById("editTitle").value=n.title||"";
-  document.getElementById("editText").value=n.text||"";
-  colorDots(); document.getElementById("editOverlay").classList.add("on"); }
-function closeEdit(){ document.getElementById("editOverlay").classList.remove("on"); editId=null; load(); }
-function colorDots(){ const c=document.getElementById("editColors"); c.innerHTML="";
-  for(const name in COLORS){ const d=document.createElement("div"); d.className="dot"+(editColor===name?" sel":"");
-    d.style.background=COLORS[name].bg; d.onclick=()=>{ editColor=name; colorDots(); }; c.appendChild(d); } }
-async function saveEdit(){
-  await api("PUT","/api/notes/"+editId,{text:document.getElementById("editText").value,
-    title:document.getElementById("editTitle").value, color:editColor});
-  closeEdit();
+function cycleColor(n){
+  n.color=ORDER[(ORDER.indexOf(n.color)+1+ORDER.length)%ORDER.length]||"yellow";
+  render();
+  api("PUT","/api/notes/"+n.id,{color:n.color}).catch(()=>{});
 }
-async function delCurrent(){ const id=editId; document.getElementById("editOverlay").classList.remove("on"); editId=null; await delNote(id); }
+function editorKeydown(e,ta){
+  if(e.key==="Enter"){
+    const pos=ta.selectionStart, v=ta.value;
+    const ls=v.lastIndexOf("\n",pos-1)+1;
+    const line=v.slice(ls,pos);
+    const m=line.match(/^(\s*)([-•]\s|[☐☑]\s|(\d+)\.\s)/);
+    if(m){
+      e.preventDefault();
+      if(line.slice(m[0].length).trim()===""){ ta.setRangeText("",ls,pos,"start"); return; }
+      let marker=m[2];
+      if(m[3]) marker=(parseInt(m[3],10)+1)+". ";
+      else if(/^[☐☑]/.test(marker)) marker="☐ ";
+      ta.setRangeText("\n"+m[1]+marker,pos,ta.selectionEnd,"end");
+      ta.dispatchEvent(new Event("input"));
+    }
+  } else if(e.key==="Tab"){
+    e.preventDefault();
+    const pos=ta.selectionStart, v=ta.value;
+    const ls=v.lastIndexOf("\n",pos-1)+1;
+    if(e.shiftKey){
+      const rm=Math.min(2,(v.slice(ls).match(/^ */)||[""])[0].length);
+      if(rm) ta.setRangeText("",ls,ls+rm,"preserve");
+    } else {
+      ta.setRangeText("  ",ls,ls,"preserve");
+    }
+    ta.dispatchEvent(new Event("input"));
+  }
+}
+function stopPtr(el){ ["pointerdown","pointermove","pointerup"].forEach(ev=>el.addEventListener(ev,e=>e.stopPropagation())); }
+function enterEdit(n,line){
+  const el=byId[n.id]; if(!el||n.locked) return;
+  const b=el.querySelector(".card-body"); if(!b) return;
+  const ta=document.createElement("textarea");
+  ta.className="bodyedit"; ta.placeholder=L.textPh;
+  ta.value=toGlyphs(n.text||"");
+  b.innerHTML=""; b.appendChild(ta);
+  stopPtr(ta);
+  let t=null;
+  const save=()=>{ const v=toStorage(ta.value);
+    if(v!==(n.text||"")){ n.text=v; api("PUT","/api/notes/"+n.id,{text:v}).catch(()=>{}); } };
+  ta.addEventListener("input",()=>{ clearTimeout(t); t=setTimeout(save,700); });
+  ta.addEventListener("keydown",e=>editorKeydown(e,ta));
+  ta.addEventListener("blur",()=>{ clearTimeout(t); save(); renderBody(el,n); });
+  ta.focus();
+  const p=(line===null||isNaN(line)) ? ta.value.length : caretForLine(ta.value,line);
+  ta.setSelectionRange(p,p);
+}
+function editTitle(n){
+  const el=byId[n.id]; if(!el||n.locked) return;
+  const span=el.querySelector(".ti"); if(!span) return;
+  const inp=document.createElement("input");
+  inp.className="ti-input"; inp.placeholder=L.titlePh; inp.value=n.title||"";
+  inp.style.color=span.style.color;
+  span.replaceWith(inp);
+  stopPtr(inp);
+  inp.addEventListener("blur",()=>{
+    const v=inp.value.trim();
+    if(v!==(n.title||"")){ n.title=v; api("PUT","/api/notes/"+n.id,{title:v}).catch(()=>{}); }
+    render();
+  });
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") inp.blur(); });
+  inp.focus();
+}
 async function delNote(id){ try{ await api("DELETE","/api/notes/"+id);}catch(e){} load(); }
 async function addNote(){
   const r=canvas.getBoundingClientRect();
   const x=Math.round((r.width/2-pan.x)/zoom-120), y=Math.round((r.height/2-pan.y)/zoom-90);
   try{ await api("POST","/api/notes",{text:"",color:"yellow",x,y,w:240,h:200}); }catch(e){}
   await load();
-  const fresh=notes[notes.length-1]; if(fresh) openEdit(fresh);
+  const fresh=notes[notes.length-1]; if(fresh) enterEdit(fresh,null);
 }
 async function load(){
   try{
