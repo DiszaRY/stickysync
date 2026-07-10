@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "StickySync"
-APP_FILE = os.path.realpath(__file__)
+FROZEN = getattr(sys, "frozen", False)          # True when packed by PyInstaller
+APP_FILE = sys.executable if FROZEN else os.path.realpath(__file__)
 
 
 def _cfg_path():
@@ -160,9 +161,11 @@ def _psq(s):
 
 def set_autostart(enabled):
     if enabled:
+        target = APP_FILE if FROZEN else sys.executable
+        args = "" if FROZEN else '"%s"' % APP_FILE
         ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut(%s);"
               "$s.TargetPath=%s;$s.Arguments=%s;$s.WorkingDirectory=%s;$s.Save()" %
-              (_psq(STARTUP_LNK), _psq(sys.executable), _psq('"%s"' % APP_FILE),
+              (_psq(STARTUP_LNK), _psq(target), _psq(args),
                _psq(os.path.dirname(APP_FILE))))
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], creationflags=0x08000000)
     else:

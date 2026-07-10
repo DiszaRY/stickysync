@@ -26,10 +26,14 @@ Colorful note cards sit right on your Windows desktop. Open a web page on your p
 - 👻 **Opacity** — notes are slightly transparent and become solid when you hover or edit.
 - ⏰ **Reminders** — set a date/time; the note pops up and chimes, with a snooze.
 - 🔒 **Lock** notes from accidental edits, **duplicate** them, give them a **title**.
-- 🔎 **All‑notes window with search** to find any note fast.
+- 🔎 **All‑notes window with search** to find any note fast (plus search on the web board).
 - 📥 **Tray icon** — hide all to tray, show all, quick settings.
+- ⌨️ **Global hotkey** — `Ctrl+Alt+N` creates a note from anywhere.
+- 🗑 **Trash** — deleted notes are kept for 30 days and can be restored.
+- 🌓 **Dark theme** on the web board (auto + manual toggle).
+- 👥 **Accounts** — multi‑user server with registration (can be disabled); each user sees only their notes.
 - 🌍 **Bilingual UI** — English / Russian, auto‑detected from your system.
-- 🔐 **Your data, your server** — single password, no third‑party cloud, SQLite storage.
+- 🔐 **Your data, your server** — no third‑party cloud, SQLite storage, daily backup script.
 
 ## 🧩 How it works
 
@@ -63,12 +67,16 @@ The server now listens on `127.0.0.1:8088`. Put it behind a reverse proxy with *
 
 ### 2. Desktop app (Windows)
 
+**Easiest:** download `StickySync.exe` from the [latest release](https://github.com/DiszaRY/stickysync/releases/latest) and run it — no Python needed.
+
+Or run from source:
+
 ```bash
 pip install PySide6        # Python 3.10+
 pythonw desktop/stickysync.pyw
 ```
 
-On first run it asks for your **server URL** (e.g. `https://notes.example.com`) and **password**. That's it — your notes appear. Enable *Start with Windows* in Settings to launch it on boot.
+On first run it asks for your **server URL** (e.g. `https://notes.example.com`), **username** and **password**. That's it — your notes appear. Enable *Start with Windows* in Settings to launch it on boot.
 
 ### 3. Phone
 
@@ -94,10 +102,9 @@ Right‑click a note's header (or the `⋯` button) for the full menu.
 
 ## 🗺️ Roadmap
 
-- Global hotkey for "new note" from anywhere
-- Trash / undo + automatic database backup
-- Mobile UI localization (RU/EN)
+- Android app (WebView wrapper for the board)
 - macOS / Linux desktop builds
+- Offline mode for the web board
 - Markdown formatting
 
 ## 📄 License
