@@ -8,6 +8,7 @@ Run without a console window:  pythonw stickysync.pyw
 Dependencies:  pip install PySide6   (Python 3.10+)
 """
 import os, sys, json, time, re, queue, threading, subprocess, winsound
+import ctypes, ctypes.wintypes
 import urllib.request, urllib.error
 
 from PySide6.QtCore import Qt, QTimer, QDateTime, QLocale
@@ -72,12 +73,13 @@ LANG = {
         "reminder_t": "Будильник", "reminder_when": "Когда напомнить:",
         "set": "Поставить", "clear": "Убрать", "cancel": "Отмена", "save": "Сохранить",
         "remind": "Напоминание:", "snooze": "Отложить 10 мин",
-        "settings_t": "Настройки", "server": "Адрес сервера:", "passwd": "Сменить пароль:",
+        "settings_t": "Настройки", "server": "Адрес сервера:",
+        "old_pw": "Старый пароль:", "new_pw": "Новый пароль:",
         "passwd_ph": "пусто — не менять", "opacity": "Непрозрачность:",
         "refresh": "Частота обновления:", "font": "Размер шрифта:", "language": "Язык:",
         "ontop_cb": "Стикеры поверх всех окон", "autostart_cb": "Запускать при старте Windows",
-        "pw_ok": "Пароль обновлён.", "pw_fail": "Не удалось войти с новым паролем.",
-        "login_p": "Пароль:", "wrong_pw": "Неверный пароль",
+        "pw_ok": "Пароль обновлён.", "pw_fail": "Старый пароль не подошёл.",
+        "login_p": "Пароль:", "user_p": "Имя пользователя:", "wrong_pw": "Неверный логин или пароль",
         "no_conn": "Нет связи с сервером:\n", "server_q": "Адрес сервера (например https://notes.example.com):",
         "new_note_n": "Появился новый стикер.", "hidden_n": "Свёрнуто в трей. Клик по иконке — показать.",
         "quit_q": "Закрыть программу? Стикеры останутся на сервере.",
@@ -96,12 +98,13 @@ LANG = {
         "reminder_t": "Reminder", "reminder_when": "Remind at:",
         "set": "Set", "clear": "Clear", "cancel": "Cancel", "save": "Save",
         "remind": "Reminder:", "snooze": "Snooze 10 min",
-        "settings_t": "Settings", "server": "Server URL:", "passwd": "Change password:",
+        "settings_t": "Settings", "server": "Server URL:",
+        "old_pw": "Old password:", "new_pw": "New password:",
         "passwd_ph": "leave blank to keep", "opacity": "Opacity:",
         "refresh": "Refresh every:", "font": "Font size:", "language": "Language:",
         "ontop_cb": "Notes always on top", "autostart_cb": "Start with Windows",
-        "pw_ok": "Password updated.", "pw_fail": "Could not sign in with the new password.",
-        "login_p": "Password:", "wrong_pw": "Wrong password",
+        "pw_ok": "Password updated.", "pw_fail": "Old password did not match.",
+        "login_p": "Password:", "user_p": "Username:", "wrong_pw": "Wrong username or password",
         "no_conn": "No connection to server:\n", "server_q": "Server URL (e.g. https://notes.example.com):",
         "new_note_n": "A new note appeared.", "hidden_n": "Hidden to tray. Click the icon to show.",
         "quit_q": "Quit the app? Your notes stay on the server.",
@@ -670,9 +673,11 @@ class SettingsDialog(QDialog):
         form = QFormLayout(self)
         form.setSpacing(10)
         self.server = QLineEdit(app.cfg.get("server", ""))
-        self.pw = QLineEdit()
-        self.pw.setEchoMode(QLineEdit.Password)
-        self.pw.setPlaceholderText(T("passwd_ph"))
+        self.pw_old = QLineEdit()
+        self.pw_old.setEchoMode(QLineEdit.Password)
+        self.pw_new = QLineEdit()
+        self.pw_new.setEchoMode(QLineEdit.Password)
+        self.pw_new.setPlaceholderText(T("passwd_ph"))
         self.lang = QComboBox()
         self.lang.addItem("Русский", "ru")
         self.lang.addItem("English", "en")
@@ -686,7 +691,8 @@ class SettingsDialog(QDialog):
         self.ontop = QCheckBox(T("ontop_cb")); self.ontop.setChecked(bool(app.cfg.get("on_top")))
         self.autostart = QCheckBox(T("autostart_cb")); self.autostart.setChecked(is_autostart())
         form.addRow(T("server"), self.server)
-        form.addRow(T("passwd"), self.pw)
+        form.addRow(T("old_pw"), self.pw_old)
+        form.addRow(T("new_pw"), self.pw_new)
         form.addRow(T("language"), self.lang)
         form.addRow(T("opacity"), self.opacity)
         form.addRow(T("refresh"), self.poll)
@@ -765,6 +771,19 @@ class StickerApp:
         threading.Thread(target=self._worker, daemon=True).start()
         self.timer = QTimer(); self.timer.timeout.connect(self._pump); self.timer.start(300)
         self.alarm_timer = QTimer(); self.alarm_timer.timeout.connect(self._check_alarms); self.alarm_timer.start(10000)
+        threading.Thread(target=self._hotkey_loop, daemon=True).start()
+
+    def _hotkey_loop(self):
+        """Global Ctrl+Alt+N -> new note. WM_HOTKEY needs a message loop on the
+        registering thread, so it lives in its own daemon thread."""
+        user32 = ctypes.windll.user32
+        MOD_ALT, MOD_CONTROL, MOD_NOREPEAT = 0x1, 0x2, 0x4000
+        if not user32.RegisterHotKey(None, 1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, ord("N")):
+            return  # combination taken by another app — silently skip
+        msg = ctypes.wintypes.MSG()
+        while not self.stop and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == 0x0312:  # WM_HOTKEY
+                self.ui_q.put(("hotkey",))
 
     def _build_tray(self):
         self.tray = QSystemTrayIcon(make_icon())
@@ -870,10 +889,11 @@ class StickerApp:
             if w.isVisible():
                 w.show()
             w.refresh_opacity()
-        pw = dlg.pw.text()
-        if pw:
+        if dlg.pw_new.text():
             try:
-                d = http("POST", "/api/login", body={"password": pw})
+                d = http("POST", "/api/password",
+                         body={"old": dlg.pw_old.text(), "new": dlg.pw_new.text()},
+                         token=self.token)
                 self.token = d["token"]; self.cfg["token"] = self.token
                 QMessageBox.information(None, APP_NAME, T("pw_ok"))
             except Exception:
@@ -928,6 +948,9 @@ class StickerApp:
 
     def _handle(self, msg):
         k = msg[0]
+        if k == "hotkey":
+            self.add_note()
+            return
         if k == "created":
             _, s, n = msg
             if s in self.pending:
@@ -998,12 +1021,19 @@ def setup_flow(cfg):
         except Exception:
             return token
     while True:
+        user, ok = QInputDialog.getText(None, APP_NAME, T("user_p"), QLineEdit.Normal,
+                                        cfg.get("username", "admin"))
+        if not ok:
+            return None
         pw, ok = QInputDialog.getText(None, APP_NAME, T("login_p"), QLineEdit.Password)
         if not ok:
             return None
         try:
-            d = http("POST", "/api/login", body={"password": pw})
-            cfg["token"] = d["token"]; save_cfg(cfg)
+            d = http("POST", "/api/login",
+                     body={"username": user.strip() or "admin", "password": pw})
+            cfg["token"] = d["token"]
+            cfg["username"] = user.strip() or "admin"
+            save_cfg(cfg)
             return d["token"]
         except urllib.error.HTTPError:
             QMessageBox.warning(None, APP_NAME, T("wrong_pw"))
