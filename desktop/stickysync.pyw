@@ -12,7 +12,8 @@ import ctypes, ctypes.wintypes
 import urllib.request, urllib.error
 
 from PySide6.QtCore import Qt, QTimer, QDateTime, QLocale
-from PySide6.QtGui import QColor, QPixmap, QPainter, QIcon, QTextCursor, QCursor, QShortcut, QKeySequence
+from PySide6.QtGui import (QColor, QPixmap, QPainter, QIcon, QTextCursor, QCursor,
+                           QShortcut, QKeySequence, QTextCharFormat)
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QLabel,
     QFrame, QGraphicsDropShadowEffect, QSizeGrip, QDialog, QFormLayout, QLineEdit,
@@ -60,7 +61,20 @@ COLORS = {
 }
 ORDER = list(COLORS.keys())
 BODY_INK = "#33312b"
-LIST_RE = re.compile(r"^(\s*)([-•]\s|\[[ xX]\]\s|(\d+)\.\s)")
+DONE_INK = "#9a958a"
+LIST_RE = re.compile(r"^(\s*)([-•]\s|[☐☑]\s|\[[ xX]\]\s|(\d+)\.\s)")
+CHECK_RE = re.compile(r"^(\s*)\[([ xX])\] ", re.M)
+GLYPH_RE = re.compile(r"^(\s*)([☐☑]) ", re.M)
+
+
+def to_display(text):
+    """Storage format '[ ] '/'[x] ' -> on-screen glyphs so checkboxes look real."""
+    return CHECK_RE.sub(lambda m: m.group(1) + ("☑" if m.group(2) in "xX" else "☐") + " ", text)
+
+
+def to_storage(text):
+    """On-screen glyphs -> plain '[ ]'/'[x]' (the sync format shared with the web board)."""
+    return GLYPH_RE.sub(lambda m: m.group(1) + ("[x]" if m.group(2) == "☑" else "[ ]") + " ", text)
 
 LANG = {
     "ru": {
@@ -224,6 +238,8 @@ class NoteEdit(QTextEdit):
                 marker = m.group(2)
                 if m.group(3):
                     marker = "%d. " % (int(m.group(3)) + 1)
+                elif marker[0] in "☐☑":
+                    marker = "☐ "
                 elif marker.strip().startswith("["):
                     marker = "[ ] "
                 super().keyPressEvent(e)
@@ -248,15 +264,33 @@ class NoteEdit(QTextEdit):
     def mousePressEvent(self, e):
         cur = self.cursorForPosition(e.pos())
         block = cur.block()
-        m = re.match(r"^(\s*)\[([ xX])\]\s", block.text())
-        if m and e.pos().x() < 32 and not self.isReadOnly():
+        m = re.match(r"^(\s*)([☐☑]) ", block.text())
+        if m and e.pos().x() < 34 and not self.isReadOnly():
             pos = block.position() + m.start(2)
             c = self.textCursor()
             c.setPosition(pos)
             c.setPosition(pos + 1, QTextCursor.KeepAnchor)
-            c.insertText(" " if m.group(2) != " " else "x")
+            c.insertText("☐" if m.group(2) == "☑" else "☑")
             return
         super().mousePressEvent(e)
+
+    def restyle(self):
+        """Gray out + strike through checked items (visual only, text untouched)."""
+        sels = []
+        block = self.document().firstBlock()
+        while block.isValid():
+            if re.match(r"^\s*☑ ", block.text()):
+                sel = QTextEdit.ExtraSelection()
+                cur = QTextCursor(block)
+                cur.select(QTextCursor.BlockUnderCursor)
+                fmt = QTextCharFormat()
+                fmt.setFontStrikeOut(True)
+                fmt.setForeground(QColor(DONE_INK))
+                sel.cursor = cur
+                sel.format = fmt
+                sels.append(sel)
+            block = block.next()
+        self.setExtraSelections(sels)
 
 
 class DragBar(QWidget):
@@ -278,7 +312,9 @@ class DragBar(QWidget):
 
     def mouseMoveEvent(self, e):
         if self._press is not None and (e.buttons() & Qt.LeftButton) and not self.win.locked:
-            self.win.move(e.globalPosition().toPoint() - self._press)
+            p = e.globalPosition().toPoint() - self._press
+            x, y = self.win.app.snap_pos(self.win, p.x(), p.y())
+            self.win.move(x, y)
 
     def mouseReleaseEvent(self, e):
         self._press = None
@@ -331,6 +367,7 @@ class StickyWindow(QWidget):
         self.title = note.get("title", "") or ""
         self.alarm = float(note.get("alarm", 0) or 0)
         self.locked = bool(note.get("locked", 0))
+        self.pinned = bool(note.get("pinned", 0))
         self.last_edit = 0.0
         self._applying = False
         self._ready = False
@@ -340,7 +377,7 @@ class StickyWindow(QWidget):
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(app.cfg.get("on_top")))
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(app.cfg.get("on_top")) or self.pinned)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
@@ -378,7 +415,7 @@ class StickyWindow(QWidget):
         cl.addWidget(self.bar)
 
         self.text = NoteEdit(self)
-        self.text.setPlainText(note.get("text", ""))
+        self.text.setPlainText(to_display(note.get("text", "")))
         self.text.setReadOnly(self.locked)
         cl.addWidget(self.text, 1)
 
@@ -404,6 +441,8 @@ class StickyWindow(QWidget):
         self._geom_timer.setSingleShot(True)
         self._geom_timer.timeout.connect(self._geom_saved)
         self.text.textChanged.connect(self._on_text)
+        self.text.textChanged.connect(self.text.restyle)
+        self.text.restyle()
 
         for seq, fn in (("Alt+N", self.app.add_note), ("Alt+A", self.set_alarm),
                         ("Alt+D", self.duplicate), ("Alt+T", self.toggle_pin),
@@ -449,6 +488,8 @@ class StickyWindow(QWidget):
 
     def _update_status(self):
         marks = ""
+        if self.pinned:
+            marks += "📌 "
         if self.locked:
             marks += "🔒 "
         if self.alarm and self.alarm > 0:
@@ -484,7 +525,7 @@ class StickyWindow(QWidget):
 
     def _save_text(self):
         if self.id:
-            self.app.enqueue(("update", self.id, {"text": self.text.toPlainText()}))
+            self.app.enqueue(("update", self.id, {"text": to_storage(self.text.toPlainText())}))
 
     def moveEvent(self, e):
         if self._ready and not self._applying and not self.collapsed:
@@ -517,7 +558,7 @@ class StickyWindow(QWidget):
         m.addAction(T("duplicate") + "\tAlt+D", self.duplicate)
         a_top = m.addAction(T("on_top") + "\tAlt+T", self.toggle_pin)
         a_top.setCheckable(True)
-        a_top.setChecked(bool(self.windowFlags() & Qt.WindowStaysOnTopHint))
+        a_top.setChecked(self.pinned)
         m.addAction(T("rollup") + "\tAlt+M", self.toggle_rollup)
         m.addSeparator()
         m.addAction(T("all_notes") + "\tAlt+F", self.app.open_manager)
@@ -537,7 +578,7 @@ class StickyWindow(QWidget):
             return
         c = self.text.textCursor()
         c.movePosition(QTextCursor.EndOfLine)
-        c.insertText("[ ] " if c.atBlockStart() else "\n[ ] ")
+        c.insertText("☐ " if c.atBlockStart() else "\n☐ ")
         self.text.setTextCursor(c)
         self.text.setFocus()
 
@@ -561,7 +602,7 @@ class StickyWindow(QWidget):
             self.app.enqueue(("update", self.id, {"locked": 1 if self.locked else 0}))
 
     def duplicate(self):
-        self.app.spawn({"text": self.text.toPlainText(), "color": self.color, "title": self.title,
+        self.app.spawn({"text": to_storage(self.text.toPlainText()), "color": self.color, "title": self.title,
                         "x": self.x() + 28, "y": self.y() + 28, "w": self.width(), "h": self.height()})
 
     def set_alarm(self):
@@ -612,9 +653,13 @@ class StickyWindow(QWidget):
             self.resize(self.width(), self._full_h)
 
     def toggle_pin(self):
-        on = not bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+        self.pinned = not self.pinned
+        self.setWindowFlag(Qt.WindowStaysOnTopHint,
+                           self.pinned or bool(self.app.cfg.get("on_top")))
         self.show()
+        self._update_status()
+        if self.id:
+            self.app.enqueue(("update", self.id, {"pinned": 1 if self.pinned else 0}))
 
     def apply_remote(self, note):
         self._applying = True
@@ -638,10 +683,16 @@ class StickyWindow(QWidget):
             al = float(note.get("alarm", 0) or 0)
             if al != self.alarm:
                 self.alarm = al
+            pn = bool(note.get("pinned", 0))
+            if pn != self.pinned:
+                self.pinned = pn
+                self.setWindowFlag(Qt.WindowStaysOnTopHint,
+                                   pn or bool(self.app.cfg.get("on_top")))
+                self.show()
             self._update_status()
             recent = (time.monotonic() - self.last_edit) < 3
             if not recent and not self.text.hasFocus():
-                rt = note.get("text", "")
+                rt = to_display(note.get("text", ""))
                 if rt != self.text.toPlainText():
                     pos = self.text.textCursor().position()
                     self.text.setPlainText(rt)
@@ -888,7 +939,7 @@ class StickerApp:
             pass
         for w in self.windows.values():
             w._apply_style()
-            w.setWindowFlag(Qt.WindowStaysOnTopHint, self.cfg["on_top"])
+            w.setWindowFlag(Qt.WindowStaysOnTopHint, self.cfg["on_top"] or w.pinned)
             if w.isVisible():
                 w.show()
             w.refresh_opacity()
@@ -966,6 +1017,24 @@ class StickerApp:
                 self.enqueue(("update", s.id, {"text": txt}))
         elif k == "notes":
             self._reconcile(msg[1])
+
+    def snap_pos(self, win, x, y, thr=14, m=12):
+        """Magnet-snap a dragged note to other notes and screen edges.
+        m = transparent shadow margin, so snapping aligns the VISIBLE card edges."""
+        w, h = win.width(), win.height()
+        scr = QApplication.primaryScreen().availableGeometry()
+        cand_x = [scr.left() - m + 6, scr.right() - w + m - 6]
+        cand_y = [scr.top() - m + 6, scr.bottom() - h + m - 6]
+        for o in self.windows.values():
+            if o is win or not o.isVisible():
+                continue
+            ox, oy, ow, oh = o.x(), o.y(), o.width(), o.height()
+            cand_x += [ox, ox + ow - w, ox + ow - 2 * m, ox - w + 2 * m]
+            cand_y += [oy, oy + oh - h, oy + oh - 2 * m, oy - h + 2 * m]
+        bx = min(cand_x, key=lambda c: abs(x - c), default=x)
+        by = min(cand_y, key=lambda c: abs(y - c), default=y)
+        return (bx if abs(x - bx) <= thr else x,
+                by if abs(y - by) <= thr else y)
 
     def _reposition(self, s):
         self.cascade = (self.cascade + 1) % 8

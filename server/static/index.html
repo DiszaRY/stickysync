@@ -326,7 +326,7 @@ function makeCard(n){
   const c=COLORS[n.color]||COLORS.yellow;
   const el=document.createElement("div"); el.className="card"; el.dataset.id=n.id;
   el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.style.width=(n.w||240)+"px"; el.style.height=(n.h||210)+"px";
-  el.innerHTML=`<div class="card-head" style="background:${c.bg}"><span class="ti" style="color:${c.ink}">${esc(n.title||"")}</span><span class="x" style="color:${c.ink}" data-act="del">✕</span></div>`
+  el.innerHTML=`<div class="card-head" style="background:${c.bg}"><span class="ti" style="color:${c.ink}">${esc(n.title||"")}</span><span class="x" style="color:${c.ink};opacity:${n.pinned?1:.35}" data-act="pin">📌</span><span class="x" style="color:${c.ink}" data-act="del">✕</span></div>`
     +`<div class="card-body">${bodyHtml(n)}</div><div class="rz"></div>`;
   el.querySelectorAll("input[type=checkbox]").forEach(cb=>{
     cb.addEventListener("change",ev=>{ ev.stopPropagation(); toggleCheck(n,parseInt(cb.dataset.i,10)); });
@@ -338,8 +338,22 @@ function render(){
   if(interacting()) return;
   world.innerHTML="";
   byId={};
-  for(const n of notes){ const el=makeCard(n); byId[n.id]=el; world.appendChild(el); }
+  const sorted=[...notes].sort((a,b)=>(a.pinned?1:0)-(b.pinned?1:0));
+  for(const n of sorted){ const el=makeCard(n); byId[n.id]=el; world.appendChild(el); }
   applySearch();
+}
+function snapPos(me,nx,ny){
+  const thr=10/zoom, w=me.w||240, h=me.h||210;
+  let bx=null,by=null;
+  for(const o of notes){
+    if(o.id===me.id) continue;
+    const ow=o.w||240, oh=o.h||210;
+    for(const c of [o.x, o.x+ow, o.x-w, o.x+ow-w])
+      if(Math.abs(nx-c)<thr && (bx===null||Math.abs(nx-c)<Math.abs(nx-bx))) bx=c;
+    for(const c of [o.y, o.y+oh, o.y-h, o.y+oh-h])
+      if(Math.abs(ny-c)<thr && (by===null||Math.abs(ny-c)<Math.abs(ny-by))) by=c;
+  }
+  return [bx===null?nx:bx, by===null?ny:by];
 }
 function updateCardEl(n){ const el=byId[n.id]; if(!el) return;
   el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.style.width=n.w+"px"; el.style.height=n.h+"px"; }
@@ -358,7 +372,7 @@ canvas.addEventListener("pointerdown",e=>{
   const cardEl=e.target.closest(".card");
   if(e.target.classList.contains("rz")){ const n=noteFromEl(cardEl); g={mode:"resize",n,sx:e.clientX,sy:e.clientY,w:n.w||240,h:n.h||210}; }
   else if(cardEl){ const n=noteFromEl(cardEl); g={mode:"card",n,el:cardEl,sx:e.clientX,sy:e.clientY,x:n.x,y:n.y,moved:false,
-      del:e.target.dataset.act==="del"}; cardEl.style.zIndex=Date.now()%100000; }
+      act:e.target.dataset.act}; cardEl.style.zIndex=Date.now()%100000; }
   else { canvas.classList.add("grabbing"); g={mode:"pan",sx:e.clientX,sy:e.clientY,px:pan.x,py:pan.y}; }
 });
 canvas.addEventListener("pointermove",e=>{
@@ -369,7 +383,8 @@ canvas.addEventListener("pointermove",e=>{
   const dx=e.clientX-g.sx, dy=e.clientY-g.sy;
   if(g.mode==="pan"){ pan.x=g.px+dx; pan.y=g.py+dy; applyTransform(); }
   else if(g.mode==="card"){ if(Math.hypot(dx,dy)>5) g.moved=true;
-    if(g.moved){ g.n.x=Math.round(g.x+dx/zoom); g.n.y=Math.round(g.y+dy/zoom); updateCardEl(g.n); } }
+    if(g.moved){ const s=snapPos(g.n, g.x+dx/zoom, g.y+dy/zoom);
+      g.n.x=Math.round(s[0]); g.n.y=Math.round(s[1]); updateCardEl(g.n); } }
   else if(g.mode==="resize"){ g.n.w=Math.round(Math.max(150,g.w+dx/zoom)); g.n.h=Math.round(Math.max(90,g.h+dy/zoom)); updateCardEl(g.n); }
 });
 function endPointer(e){
@@ -380,7 +395,9 @@ function endPointer(e){
   else if(g.mode==="resize"){ api("PUT","/api/notes/"+g.n.id,{w:g.n.w,h:g.n.h}).catch(()=>{}); }
   else if(g.mode==="card"){
     if(g.moved){ api("PUT","/api/notes/"+g.n.id,{x:g.n.x,y:g.n.y}).catch(()=>{}); }
-    else if(g.del){ delNote(g.n.id); }
+    else if(g.act==="del"){ delNote(g.n.id); }
+    else if(g.act==="pin"){ const n=g.n; n.pinned=n.pinned?0:1; g=null; render();
+      api("PUT","/api/notes/"+n.id,{pinned:n.pinned}).catch(()=>{}); return; }
     else { openEdit(g.n); }
   }
   g=null;
@@ -389,6 +406,12 @@ canvas.addEventListener("pointerup",endPointer);
 canvas.addEventListener("pointercancel",endPointer);
 canvas.addEventListener("wheel",e=>{ e.preventDefault(); const r=canvas.getBoundingClientRect();
   zoomAround(e.deltaY<0?1.12:0.89, e.clientX-r.left, e.clientY-r.top); }, {passive:false});
+canvas.addEventListener("dblclick",e=>{
+  if(e.target.closest(".card")) return;
+  const r=canvas.getBoundingClientRect();
+  const x=Math.round((e.clientX-r.left-pan.x)/zoom), y=Math.round((e.clientY-r.top-pan.y)/zoom);
+  api("POST","/api/notes",{text:"",color:"yellow",x,y,w:240,h:200}).then(load).catch(()=>{});
+});
 
 let pinch=null;
 function twoPts(){ const a=[...pointers.values()]; return a.slice(0,2); }

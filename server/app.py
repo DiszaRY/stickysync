@@ -61,6 +61,7 @@ with closing(db()) as c:
         title text not null default '',
         alarm real not null default 0,
         locked integer not null default 0,
+        pinned integer not null default 0,
         updated real not null default 0,
         deleted integer not null default 0,
         user_id integer not null default 0
@@ -78,6 +79,7 @@ with closing(db()) as c:
                      ("title", "title text not null default ''"),
                      ("alarm", "alarm real not null default 0"),
                      ("locked", "locked integer not null default 0"),
+                     ("pinned", "pinned integer not null default 0"),
                      ("user_id", "user_id integer not null default 0")):
         if col not in cols:
             c.execute("alter table notes add column " + ddl)
@@ -132,6 +134,7 @@ class NoteIn(BaseModel):
     title: str = ""
     alarm: float = 0.0
     locked: int = 0
+    pinned: int = 0
 
 
 class NotePatch(BaseModel):
@@ -144,6 +147,7 @@ class NotePatch(BaseModel):
     title: str | None = None
     alarm: float | None = None
     locked: int | None = None
+    pinned: int | None = None
 
 
 @app.get("/api/info")
@@ -211,9 +215,9 @@ def list_notes(user=Depends(auth)):
 def create_note(n: NoteIn, user=Depends(auth)):
     with closing(db()) as c:
         cur = c.execute(
-            "insert into notes(text,color,x,y,w,h,title,alarm,locked,updated,user_id) "
-            "values(?,?,?,?,?,?,?,?,?,?,?)",
-            (n.text, n.color, n.x, n.y, n.w, n.h, n.title, n.alarm, n.locked,
+            "insert into notes(text,color,x,y,w,h,title,alarm,locked,pinned,updated,user_id) "
+            "values(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (n.text, n.color, n.x, n.y, n.w, n.h, n.title, n.alarm, n.locked, n.pinned,
              time.time(), user["id"]))
         c.commit()
         row = c.execute("select * from notes where id=?", (cur.lastrowid,)).fetchone()
